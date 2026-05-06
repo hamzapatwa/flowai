@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# FlowAI
 
-## Getting Started
+AI-native workflow automation. Describe a workflow in plain English; FlowAI generates a visual DAG and runs it on real integrations (Webhook, HTTP, Slack, Gmail).
 
-First, run the development server:
+## Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- **Next.js 16** (App Router, Turbopack, React 19)
+- **TypeScript**, **Tailwind v4**, custom dark UI
+- **React Flow** (`@xyflow/react`) for the visual editor
+- **Postgres** + **Drizzle ORM** (Supabase or any Postgres)
+- **Redis** + **BullMQ** for the workflow execution queue
+- **Clerk** for authentication
+- **Anthropic Claude Sonnet 4.5** for natural-language → workflow generation
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Setup
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Copy `.env.example` to `.env.local` and fill in the values.
+2. Install dependencies:
+   ```
+   npm install
+   ```
+3. Push the schema to your database:
+   ```
+   npm run db:push
+   ```
+4. (Optional) Seed demo data:
+   ```
+   npm run seed
+   ```
+5. Run the Next.js dev server **and** the BullMQ worker (in two terminals):
+   ```
+   npm run dev
+   npm run worker
+   ```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Architecture
 
-## Learn More
+- `src/app/(dashboard)/` — authenticated UI (workflows, editor, runs, integrations)
+- `src/app/api/` — REST routes for CRUD + run + OAuth + webhook trigger
+- `src/lib/integrations/` — pluggable integration adapters
+- `src/lib/workflow/` — DAG executor, topological sort, variable interpolation
+- `src/lib/queue/` — BullMQ producer (`jobs.ts`) and worker (`worker.ts`)
+- `src/lib/ai/` — Claude prompt + JSON-schema-validated parser
 
-To learn more about Next.js, take a look at the following resources:
+## Deploying
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- Next.js → Vercel (set all env vars)
+- Worker → Railway / Fly / a VPS (`npm run worker`)
+- Postgres → Supabase
+- Redis → Upstash or Railway
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Demo
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Use the **Load demo** button in the New Workflow dialog to pre-fill a "GitHub PR → Slack" prompt.

@@ -1,26 +1,97 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+@theme {
+  --color-bg: #0a0a0a;
+  --color-surface: #111111;
+  --color-border: #1f1f1f;
+  --color-accent: #6366f1;
+  --color-success: #22c55e;
+  --color-danger: #ef4444;
+  --color-muted: #737373;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+html,
+body {
+  background: #0a0a0a;
+  color: #fafafa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(99, 102, 241, 0.4);
+}
+
+.react-flow__node {
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+.react-flow__handle {
+  background: #6366f1;
+  border-color: #0a0a0a;
+  width: 10px;
+  height: 10px;
+}
+
+.react-flow__edge-path {
+  stroke: #404040;
+  stroke-width: 2;
+}
+
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:focus .react-flow__edge-path,
+.react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: #6366f1;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke: #6366f1;
+  stroke-dasharray: 5;
+  animation: dash 0.5s linear infinite;
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: -10;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+.react-flow__controls {
+  background: #111111;
+  border: 1px solid #1f1f1f;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: #111111;
+  border-bottom: 1px solid #1f1f1f;
+  color: #fafafa;
+}
+
+.react-flow__controls-button:hover {
+  background: #1f1f1f;
+}
+
+.react-flow__minimap {
+  background: #111111;
+  border: 1px solid #1f1f1f;
+}
+
+.react-flow__background {
+  background: #0a0a0a;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+.font-mono {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
 }
