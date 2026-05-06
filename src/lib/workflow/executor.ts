@@ -1,3 +1,5 @@
+import { nanoid } from 'nanoid';
+import { eq } from 'drizzle-orm';
 import {
   getRun,
   updateRun,
@@ -7,18 +9,25 @@ import {
 } from '@/lib/db/queries';
 import { db } from '@/lib/db';
 import { workflows } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
-import { getIntegration } from '@/lib/integrations';
-import { WorkflowContext } from './context';
+import { runSubAgent } from '@/lib/agents/subagent';
+import { publishEvent } from '@/lib/events/bus';
 import { topologicalSort } from './utils';
-import type { WorkflowDefinition, WorkflowNode } from '@/types/workflow';
+import { WorkflowContext } from './context';
+import type {
+  AgentNode,
+  AgentWorkflowDefinition,
+  ToolId,
+} from '@/types/workflow';
+import type { ToolContext } from '@/types/tools';
+
+const MAX_SPAWN_DEPTH = 3;
+const MAX_SPAWN_PER_RUN = 10;
 
 export async function executeWorkflow(runId: string, workflowId: string) {
   console.log(`[executor] Starting run ${runId} for workflow ${workflowId}`);
 
   const run = await getRun(runId);
   if (!run) throw new Error(`Run ${runId} not found`);
-  console.log(`[executor] Run found, status: ${run.status}`);
 
   const wfRows = await db
     .select()
@@ -27,123 +36,222 @@ export async function executeWorkflow(runId: string, workflowId: string) {
     .limit(1);
   const workflow = wfRows[0];
   if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
-  console.log(`[executor] Workflow found: "${workflow.name}", userId: ${workflow.userId}`);
 
   const userId = workflow.userId;
-  const definition = workflow.definition as unknown as WorkflowDefinition;
+  const definition = workflow.definition as unknown as AgentWorkflowDefinition;
 
   await updateRun(runId, { status: 'running', startedAt: new Date() });
+  await publishEvent({
+    type: 'run_started',
+    runId,
+    at: new Date().toISOString(),
+  });
 
   const ctx = new WorkflowContext(
     (run.triggerData as Record<string, unknown>) ?? {}
   );
 
-  let sorted: WorkflowNode[];
+  let sorted: AgentNode[];
   try {
     sorted = topologicalSort(definition.nodes, definition.edges);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Sort failed';
-    await updateRun(runId, {
-      status: 'failed',
-      error: msg,
-      completedAt: new Date(),
-    });
+    await failRun(runId, msg);
     throw err;
   }
 
-  for (const node of sorted) {
-    if (node.type === 'trigger') {
-      ctx.setStepOutput(
-        node.id,
-        (run.triggerData as Record<string, unknown>) ?? {}
-      );
-      continue;
-    }
+  // Cached OAuth tokens per provider for this run.
+  const tokenCache = new Map<
+    string,
+    { accessToken: string; metadata: Record<string, unknown> } | null
+  >();
 
-    console.log(`[executor] Executing node "${node.name}" (${node.integration}/${node.action})`);
+  const getOAuth: ToolContext['getOAuth'] = async (provider) => {
+    if (tokenCache.has(provider)) return tokenCache.get(provider) ?? null;
+    const tok = await getOAuthToken(userId, provider);
+    const value = tok
+      ? {
+          accessToken: tok.accessToken,
+          metadata: (tok.metadata as Record<string, unknown>) ?? {},
+        }
+      : null;
+    tokenCache.set(provider, value);
+    return value;
+  };
 
-    const integration = getIntegration(node.integration);
-    if (!integration) {
-      const err = `Unknown integration: ${node.integration}`;
-      await updateRun(runId, {
-        status: 'failed',
-        error: err,
-        completedAt: new Date(),
-      });
-      throw new Error(err);
-    }
+  let spawnedCount = 0;
 
-    const interpolatedConfig = ctx.interpolate(node.config) as Record<
-      string,
-      unknown
-    >;
-    console.log(`[executor] Node config (interpolated):`, JSON.stringify(interpolatedConfig));
-
+  /**
+   * Recursively run a sub-agent, with optional spawn capability.
+   * Children created via spawn_subagent themselves get a spawn fn (depth+1).
+   */
+  const runNode = async (args: {
+    node: { id: string; name: string; goal: string; toolkit: ToolId[] };
+    parentStepId: string | null;
+    depth: number;
+    upstreamOutputs: Record<string, Record<string, unknown>>;
+  }) => {
     const step = await createRunStep({
       runId,
-      nodeId: node.id,
-      nodeName: node.name,
-      input: interpolatedConfig,
+      nodeId: args.node.id,
+      nodeName: args.node.name,
+      goal: args.node.goal,
+      toolkit: args.node.toolkit,
+      parentStepId: args.parentStepId,
+      input: { goal: args.node.goal, toolkit: args.node.toolkit },
     });
 
-    let oauthToken: string | undefined;
-    let oauthMetadata: Record<string, unknown> | undefined;
-    if (integration.requiresOAuth && integration.oauthProvider) {
-      console.log(`[executor] Looking up OAuth token for provider: ${integration.oauthProvider}, userId: ${userId}`);
-      const tok = await getOAuthToken(userId, integration.oauthProvider);
-      if (!tok) {
-        const errMsg = `${integration.name} is not connected for this user`;
-        console.error(`[executor] OAuth token not found for ${integration.oauthProvider}`);
-        await updateRunStep(step.id, {
-          status: 'failed',
-          error: errMsg,
-          completedAt: new Date(),
-        });
-        await updateRun(runId, {
-          status: 'failed',
-          error: errMsg,
-          completedAt: new Date(),
-        });
-        throw new Error(errMsg);
-      }
-      console.log(`[executor] OAuth token found, expires: ${tok.expiresAt}`);
-      oauthToken = tok.accessToken;
-      oauthMetadata = (tok.metadata as Record<string, unknown>) ?? {};
+    if (args.parentStepId) {
+      await publishEvent({
+        type: 'node_spawned',
+        runId,
+        parentStepId: args.parentStepId,
+        stepId: step.id,
+        nodeId: args.node.id,
+        nodeName: args.node.name,
+        goal: args.node.goal,
+        toolkit: args.node.toolkit,
+        at: new Date().toISOString(),
+      });
+    } else {
+      await publishEvent({
+        type: 'step_started',
+        runId,
+        stepId: step.id,
+        nodeId: args.node.id,
+        nodeName: args.node.name,
+        goal: args.node.goal,
+        toolkit: args.node.toolkit,
+        at: new Date().toISOString(),
+      });
     }
 
+    const spawn =
+      args.depth < MAX_SPAWN_DEPTH
+        ? async (childArgs: {
+            goal: string;
+            toolkit: ToolId[];
+            name?: string;
+          }) => {
+            if (spawnedCount >= MAX_SPAWN_PER_RUN) {
+              throw new Error(
+                `spawn_subagent: per-run cap of ${MAX_SPAWN_PER_RUN} reached`
+              );
+            }
+            spawnedCount++;
+            const childNode = {
+              id: `${args.node.id}-spawn-${nanoid(4)}`,
+              name: childArgs.name ?? 'sub-agent',
+              goal: childArgs.goal,
+              toolkit: childArgs.toolkit,
+            };
+            const result = await runNode({
+              node: childNode,
+              parentStepId: step.id,
+              depth: args.depth + 1,
+              upstreamOutputs: args.upstreamOutputs,
+            });
+            return { output: result.output, stepId: result.stepId };
+          }
+        : undefined;
+
     try {
-      console.log(`[executor] Calling integration.execute for ${node.integration}/${node.action}`);
-      const output = await integration.execute(node.action, interpolatedConfig, {
-        userId,
+      const { output } = await runSubAgent({
         runId,
-        stepData: ctx.allStepData(),
-        oauthToken,
-        oauthMetadata,
+        stepId: step.id,
+        userId,
+        nodeId: args.node.id,
+        nodeName: args.node.name,
+        goal: args.node.goal,
+        toolkit: args.node.toolkit,
+        upstreamOutputs: args.upstreamOutputs,
+        getOAuth,
+        spawn,
       });
-      console.log(`[executor] Node "${node.name}" succeeded:`, JSON.stringify(output));
-      ctx.setStepOutput(node.id, output);
-      await updateRunStep(step.id, {
+      await publishEvent({
+        type: 'step_finished',
+        runId,
+        stepId: step.id,
         status: 'success',
         output,
-        completedAt: new Date(),
+        at: new Date().toISOString(),
       });
+      return { output, stepId: step.id };
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      console.error(`[executor] Node "${node.name}" failed:`, err);
+      const msg = err instanceof Error ? err.message : String(err);
       await updateRunStep(step.id, {
         status: 'failed',
-        error: errMsg,
+        error: msg,
         completedAt: new Date(),
       });
-      await updateRun(runId, {
+      await publishEvent({
+        type: 'step_finished',
+        runId,
+        stepId: step.id,
         status: 'failed',
-        error: errMsg,
-        completedAt: new Date(),
+        error: msg,
+        at: new Date().toISOString(),
       });
       throw err;
     }
+  };
+
+  try {
+    for (const node of sorted) {
+      if (node.type === 'trigger') {
+        ctx.setStepOutput(
+          node.id,
+          (run.triggerData as Record<string, unknown>) ?? {}
+        );
+        continue;
+      }
+
+      const interpolatedGoal =
+        typeof node.goal === 'string'
+          ? (ctx.interpolate(node.goal) as string)
+          : '';
+
+      const { output } = await runNode({
+        node: {
+          id: node.id,
+          name: node.name,
+          goal: interpolatedGoal,
+          toolkit: node.toolkit,
+        },
+        parentStepId: null,
+        depth: 0,
+        upstreamOutputs: ctx.allStepData(),
+      });
+
+      ctx.setStepOutput(node.id, output);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await failRun(runId, msg);
+    throw err;
   }
 
-  console.log(`[executor] Workflow completed successfully`);
+  console.log(`[executor] Run ${runId} completed`);
   await updateRun(runId, { status: 'success', completedAt: new Date() });
+  await publishEvent({
+    type: 'run_finished',
+    runId,
+    status: 'success',
+    at: new Date().toISOString(),
+  });
+}
+
+async function failRun(runId: string, error: string) {
+  await updateRun(runId, {
+    status: 'failed',
+    error,
+    completedAt: new Date(),
+  });
+  await publishEvent({
+    type: 'run_finished',
+    runId,
+    status: 'failed',
+    error,
+    at: new Date().toISOString(),
+  });
 }

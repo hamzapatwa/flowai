@@ -18,42 +18,40 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { TriggerNode } from './nodes/TriggerNode';
-import { ActionNode } from './nodes/ActionNode';
-import { ConditionNode } from './nodes/ConditionNode';
-import { NodeConfigPanel } from './NodeConfigPanel';
+import { AgentNode } from './nodes/AgentNode';
+import { NodeConfigPanel, type ToolOption } from './NodeConfigPanel';
+import { TranscriptPanel, StepHeader } from './TranscriptPanel';
+import { useRunStream } from './useRunStream';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { useRouter } from 'next/navigation';
 import { Save, Play, Plus, Copy, Power } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import type {
-  WorkflowDefinition,
-  WorkflowNode,
-  WorkflowEdge,
-  IntegrationProvider,
+  AgentEdge,
+  AgentNode as AgentNodeData,
+  AgentWorkflowDefinition,
+  ToolId,
 } from '@/types/workflow';
-import type { Integration } from '@/types/integrations';
 
 const nodeTypes = {
   trigger: TriggerNode,
-  action: ActionNode,
-  condition: ConditionNode,
+  agent: AgentNode,
 };
 
 interface Props {
   workflowId: string;
   initialName: string;
-  initialDefinition: WorkflowDefinition;
+  initialDefinition: AgentWorkflowDefinition;
   initialActive: boolean;
   initialTriggerType: string;
   webhookUrl?: string;
-  integrations: Pick<
-    Integration,
-    'id' | 'name' | 'description' | 'actions' | 'triggers'
-  >[];
+  tools: ToolOption[];
+  connectedProviders: string[];
+  initialRunId: string | null;
 }
 
-function definitionToFlow(def: WorkflowDefinition): {
+function definitionToFlow(def: AgentWorkflowDefinition): {
   nodes: Node[];
   edges: Edge[];
 } {
@@ -73,16 +71,16 @@ function definitionToFlow(def: WorkflowDefinition): {
   return { nodes, edges };
 }
 
-function flowToDefinition(nodes: Node[], edges: Edge[]): WorkflowDefinition {
+function flowToDefinition(nodes: Node[], edges: Edge[]): AgentWorkflowDefinition {
   return {
     nodes: nodes.map((n) => {
-      const d = n.data as unknown as WorkflowNode;
+      const d = n.data as unknown as AgentNodeData;
       return {
         id: n.id,
         type: d.type,
         name: d.name,
-        integration: d.integration,
-        action: d.action,
+        goal: d.goal ?? '',
+        toolkit: d.toolkit ?? [],
         config: d.config ?? {},
         position: n.position,
       };
@@ -91,7 +89,7 @@ function flowToDefinition(nodes: Node[], edges: Edge[]): WorkflowDefinition {
       id: e.id,
       source: e.source,
       target: e.target,
-    })) as WorkflowEdge[],
+    })) as AgentEdge[],
   };
 }
 
@@ -109,7 +107,9 @@ function Inner({
   initialDefinition,
   initialActive,
   webhookUrl,
-  integrations,
+  tools,
+  connectedProviders,
+  initialRunId,
 }: Props) {
   const initial = useMemo(
     () => definitionToFlow(initialDefinition),
@@ -122,8 +122,69 @@ function Inner({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(initialRunId);
   const toast = useToast();
   const router = useRouter();
+
+  const runState = useRunStream(activeRunId);
+  const connectedSet = useMemo(
+    () => new Set(connectedProviders),
+    [connectedProviders]
+  );
+
+  // Project live run status onto each top-level node during render — keeps
+  // `nodes` itself as the canonical workflow definition and avoids a setState
+  // cascade in an effect.
+  const nodesWithStatus = useMemo<Node[]>(() => {
+    return nodes.map((n) => {
+      const stepId = runState.byNodeId[n.id];
+      const step = stepId ? runState.steps[stepId] : null;
+      const status = step?.status ?? (runState.runId ? 'pending' : undefined);
+      return { ...n, data: { ...n.data, status } };
+    });
+  }, [nodes, runState]);
+
+  // Render dynamically spawned children as floating ghost nodes around their parent.
+  const spawnedNodes = useMemo<Node[]>(() => {
+    const list: Node[] = [];
+    const parentPositions = new Map<string, { x: number; y: number }>();
+    nodes.forEach((n) => parentPositions.set(n.id, n.position));
+
+    Object.values(runState.steps).forEach((step) => {
+      if (!step.isSpawned || !step.parentStepId) return;
+      const parentStep = runState.steps[step.parentStepId];
+      if (!parentStep) return;
+      const parentNodePos = parentPositions.get(parentStep.nodeId) ?? {
+        x: 250,
+        y: 100,
+      };
+      const offsetIndex = list.filter((n) =>
+        n.id.startsWith(`spawn:${parentStep.nodeId}:`)
+      ).length;
+      list.push({
+        id: `spawn:${parentStep.nodeId}:${step.stepId}`,
+        type: 'agent',
+        position: {
+          x: parentNodePos.x + 320,
+          y: parentNodePos.y + offsetIndex * 140,
+        },
+        data: {
+          name: step.nodeName,
+          goal: step.goal,
+          toolkit: step.toolkit as ToolId[],
+          status: step.status,
+          isSpawned: true,
+        },
+        draggable: false,
+      });
+    });
+    return list;
+  }, [runState, nodes]);
+
+  const allNodes = useMemo(
+    () => [...nodesWithStatus, ...spawnedNodes],
+    [nodesWithStatus, spawnedNodes]
+  );
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
@@ -149,11 +210,22 @@ function Inner({
   );
 
   const selectedNode = useMemo(
-    () => nodes.find((n) => n.id === selectedId) ?? null,
-    [nodes, selectedId]
+    () => allNodes.find((n) => n.id === selectedId) ?? null,
+    [allNodes, selectedId]
   );
 
-  function updateNodeData(id: string, patch: Partial<WorkflowNode>) {
+  // Determine which step is selected — either the spawned step id directly, or the top-level node's step.
+  const selectedStep = useMemo(() => {
+    if (!selectedNode) return null;
+    if (selectedNode.id.startsWith('spawn:')) {
+      const stepId = selectedNode.id.split(':').pop();
+      return stepId ? runState.steps[stepId] : null;
+    }
+    const stepId = runState.byNodeId[selectedNode.id];
+    return stepId ? runState.steps[stepId] : null;
+  }, [selectedNode, runState]);
+
+  function updateNodeData(id: string, patch: Partial<AgentNodeData>) {
     setNodes((nds) =>
       nds.map((n) => {
         if (n.id !== id) return n;
@@ -168,22 +240,19 @@ function Inner({
     setSelectedId(null);
   }
 
-  function addActionNode(integration: IntegrationProvider) {
-    const integ = integrations.find((i) => i.id === integration);
-    if (!integ || integ.actions.length === 0) return;
-    const action = integ.actions[0];
-    const id = `action-${integration}-${nanoid(4)}`;
-    const lastY = Math.max(0, ...nodes.map((n) => n.position.y)) + 150;
+  function addAgentNode() {
+    const id = `agent-${nanoid(4)}`;
+    const lastY = Math.max(0, ...nodes.map((n) => n.position.y)) + 160;
     const newNode: Node = {
       id,
-      type: 'action',
+      type: 'agent',
       position: { x: 250, y: lastY },
       data: {
         id,
-        type: 'action',
-        name: action.name,
-        integration,
-        action: action.id,
+        type: 'agent',
+        name: 'New sub-agent',
+        goal: '',
+        toolkit: [],
         config: {},
         position: { x: 250, y: lastY },
       },
@@ -222,7 +291,8 @@ function Inner({
       });
       if (!res.ok) throw new Error('Failed to enqueue run');
       const { runId } = await res.json();
-      toast.push('success', `Run enqueued (${runId.slice(0, 8)}…)`);
+      setActiveRunId(runId);
+      toast.push('success', `Run started (${runId.slice(0, 8)}…)`);
     } catch (e) {
       toast.push('error', e instanceof Error ? e.message : 'Run failed');
     } finally {
@@ -255,6 +325,11 @@ function Inner({
             onChange={(e) => setName(e.target.value)}
             className="bg-transparent text-lg font-semibold focus:outline-none focus:bg-[#111111] px-2 py-1 rounded"
           />
+          {runState.runId && (
+            <span className="text-xs text-[#737373] font-mono">
+              run {runState.runId.slice(0, 8)} · {runState.status}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -277,25 +352,18 @@ function Inner({
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-64 border-r border-[#1f1f1f] flex flex-col bg-[#0a0a0a]">
+        <aside className="w-72 border-r border-[#1f1f1f] flex flex-col bg-[#0a0a0a]">
           <div className="p-4 border-b border-[#1f1f1f]">
             <h3 className="text-xs uppercase tracking-wide text-[#737373] mb-2">
-              Add Action
+              Build
             </h3>
-            <div className="flex flex-col gap-1">
-              {integrations
-                .filter((i) => i.actions.length > 0)
-                .map((i) => (
-                  <button
-                    key={i.id}
-                    onClick={() => addActionNode(i.id as IntegrationProvider)}
-                    className="text-left px-3 py-2 rounded-md hover:bg-[#1f1f1f] text-sm flex items-center gap-2 transition"
-                  >
-                    <Plus className="h-3 w-3 text-[#6366f1]" />
-                    {i.name}
-                  </button>
-                ))}
-            </div>
+            <button
+              onClick={addAgentNode}
+              className="w-full text-left px-3 py-2 rounded-md hover:bg-[#1f1f1f] text-sm flex items-center gap-2 transition border border-[#1f1f1f]"
+            >
+              <Plus className="h-3 w-3 text-[#6366f1]" />
+              Add sub-agent
+            </button>
           </div>
 
           {webhookUrl && (
@@ -318,17 +386,53 @@ function Inner({
             </div>
           )}
 
-          <div className="flex-1 p-4 overflow-auto">
+          <div className="flex-1 overflow-auto">
             {selectedNode ? (
-              <NodeConfigPanel
-                node={selectedNode.data as unknown as WorkflowNode}
-                integrations={integrations}
-                onUpdate={(patch) => updateNodeData(selectedNode.id, patch)}
-                onDelete={() => deleteNode(selectedNode.id)}
-              />
+              <div className="p-4">
+                {!selectedNode.id.startsWith('spawn:') ? (
+                  <NodeConfigPanel
+                    node={selectedNode.data as unknown as AgentNodeData}
+                    tools={tools}
+                    connectedProviders={connectedSet}
+                    onUpdate={(patch) => updateNodeData(selectedNode.id, patch)}
+                    onDelete={() => deleteNode(selectedNode.id)}
+                  />
+                ) : (
+                  <div className="text-xs text-[#737373] p-3 border border-dashed border-[#1f1f1f] rounded">
+                    Spawned sub-agent (read-only). Created at runtime by the
+                    parent agent.
+                  </div>
+                )}
+                {selectedStep && (
+                  <div className="mt-4 pt-4 border-t border-[#1f1f1f]">
+                    <StepHeader
+                      step={{
+                        stepId: selectedStep.stepId,
+                        status: selectedStep.status,
+                        goal: selectedStep.goal,
+                        toolkit: selectedStep.toolkit,
+                        transcript: selectedStep.transcript,
+                        output: selectedStep.output,
+                        error: selectedStep.error,
+                      }}
+                    />
+                    <TranscriptPanel
+                      step={{
+                        stepId: selectedStep.stepId,
+                        status: selectedStep.status,
+                        goal: selectedStep.goal,
+                        toolkit: selectedStep.toolkit,
+                        transcript: selectedStep.transcript,
+                        output: selectedStep.output,
+                        error: selectedStep.error,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
             ) : (
-              <div className="text-xs text-[#525252] text-center py-8">
-                Select a node to configure it
+              <div className="p-4 text-xs text-[#525252] text-center py-8">
+                Select a node to configure it or watch its live transcript.
               </div>
             )}
           </div>
@@ -336,7 +440,7 @@ function Inner({
 
         <div className="flex-1">
           <ReactFlow
-            nodes={nodes}
+            nodes={allNodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}

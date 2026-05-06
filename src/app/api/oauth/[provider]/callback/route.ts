@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { upsertOAuthToken } from '@/lib/db/queries';
-import { getOAuth2Client } from '@/lib/integrations/gmail';
+import { getOAuth2Client } from '@/lib/tools/google';
 
 type Params = { params: Promise<{ provider: string }> };
 
@@ -87,6 +87,96 @@ export async function GET(req: Request, { params }: Params) {
         expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
         scope: tokens.scope ?? null,
         metadata: { email },
+      });
+    } else if (provider === 'github') {
+      const tokenRes = await fetch(
+        'https://github.com/login/oauth/access_token',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            client_id: process.env.GITHUB_CLIENT_ID,
+            client_secret: process.env.GITHUB_CLIENT_SECRET,
+            code,
+            redirect_uri: redirectUri,
+          }),
+        }
+      );
+      const json = (await tokenRes.json()) as {
+        access_token?: string;
+        scope?: string;
+        token_type?: string;
+        error?: string;
+      };
+      if (!json.access_token) {
+        return new NextResponse(`GitHub OAuth failed: ${json.error ?? ''}`, {
+          status: 400,
+        });
+      }
+
+      let login: string | undefined;
+      try {
+        const userRes = await fetch('https://api.github.com/user', {
+          headers: {
+            Authorization: `Bearer ${json.access_token}`,
+            Accept: 'application/vnd.github+json',
+          },
+        });
+        const u = (await userRes.json()) as { login?: string };
+        login = u.login;
+      } catch {
+        /* optional */
+      }
+
+      await upsertOAuthToken({
+        userId,
+        provider: 'github',
+        accessToken: json.access_token,
+        scope: json.scope ?? null,
+        metadata: { login },
+      });
+    } else if (provider === 'notion') {
+      const auth = Buffer.from(
+        `${process.env.NOTION_CLIENT_ID}:${process.env.NOTION_CLIENT_SECRET}`
+      ).toString('base64');
+      const res = await fetch('https://api.notion.com/v1/oauth/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Basic ${auth}`,
+        },
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+        }),
+      });
+      const json = (await res.json()) as {
+        access_token?: string;
+        workspace_name?: string;
+        workspace_id?: string;
+        bot_id?: string;
+        owner?: { user?: { name?: string; id?: string } };
+        error?: string;
+      };
+      if (!json.access_token) {
+        return new NextResponse(`Notion OAuth failed: ${json.error ?? ''}`, {
+          status: 400,
+        });
+      }
+      await upsertOAuthToken({
+        userId,
+        provider: 'notion',
+        accessToken: json.access_token,
+        metadata: {
+          workspace_name: json.workspace_name,
+          workspace_id: json.workspace_id,
+          bot_id: json.bot_id,
+          owner: json.owner,
+        },
       });
     } else {
       return new NextResponse('Unknown provider', { status: 400 });

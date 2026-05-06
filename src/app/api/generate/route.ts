@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { generateWorkflow } from '@/lib/ai/generate';
+import { orchestrate } from '@/lib/agents/orchestrator';
 
 export async function POST(req: Request) {
   const { userId } = await auth();
@@ -8,14 +8,11 @@ export async function POST(req: Request) {
 
   const { prompt } = await req.json();
   if (!prompt || typeof prompt !== 'string' || prompt.length > 5000) {
-    return NextResponse.json(
-      { error: 'Invalid prompt' },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: 'Invalid prompt' }, { status: 400 });
   }
 
   try {
-    const result = await generateWorkflow(prompt);
+    const result = await orchestrate(prompt);
     return NextResponse.json(result);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Generation failed';

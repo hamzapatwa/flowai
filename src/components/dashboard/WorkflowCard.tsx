@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Edit, Activity, Trash2, MoreVertical } from 'lucide-react';
+import { Edit, Activity, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/toast';
 import { formatRelative } from '@/lib/utils';

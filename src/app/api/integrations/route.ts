@@ -1,26 +1,24 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { listIntegrations } from '@/lib/integrations';
+import { listOAuthProviders, listTools } from '@/lib/tools';
 import { listOAuthTokens, deleteOAuthToken } from '@/lib/db/queries';
 
 export async function GET() {
   const { userId } = await auth();
   if (!userId) return new NextResponse('Unauthorized', { status: 401 });
 
-  const integrations = listIntegrations().map((i) => ({
-    id: i.id,
-    name: i.name,
-    description: i.description,
-    icon: i.icon,
-    requiresOAuth: i.requiresOAuth,
-    oauthProvider: i.oauthProvider,
-    triggerCount: i.triggers.length,
-    actionCount: i.actions.length,
+  const providers = listOAuthProviders();
+  const tools = listTools().map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    icon: t.icon,
+    requiresOAuth: t.requiresOAuth,
+    oauthProvider: t.oauthProvider,
   }));
-
   const connections = await listOAuthTokens(userId);
 
-  return NextResponse.json({ integrations, connections });
+  return NextResponse.json({ providers, tools, connections });
 }
 
 export async function DELETE(req: Request) {

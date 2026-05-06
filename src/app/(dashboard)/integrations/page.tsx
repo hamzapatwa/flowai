@@ -1,6 +1,6 @@
 import { auth } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
-import { listIntegrations } from '@/lib/integrations';
+import { listOAuthProviders, listTools } from '@/lib/tools';
 import { listOAuthTokens } from '@/lib/db/queries';
 import { IntegrationsGrid } from '@/components/dashboard/IntegrationsGrid';
 
@@ -8,17 +8,15 @@ export default async function IntegrationsPage() {
   const { userId } = await auth();
   if (!userId) redirect('/sign-in');
 
-  const integrations = listIntegrations().map((i) => ({
-    id: i.id,
-    name: i.name,
-    description: i.description,
-    icon: i.icon,
-    requiresOAuth: i.requiresOAuth,
-    oauthProvider: i.oauthProvider,
-    triggerCount: i.triggers.length,
-    actionCount: i.actions.length,
+  const providers = listOAuthProviders();
+  const tools = listTools().map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    icon: t.icon,
+    requiresOAuth: t.requiresOAuth,
+    oauthProvider: t.oauthProvider,
   }));
-
   const connections = await listOAuthTokens(userId);
 
   return (
@@ -26,11 +24,12 @@ export default async function IntegrationsPage() {
       <div className="mb-8">
         <h1 className="text-2xl font-semibold tracking-tight">Integrations</h1>
         <p className="text-sm text-[#737373] mt-1">
-          Connect the services you want to automate.
+          Connect the services your agents can use as tools.
         </p>
       </div>
       <IntegrationsGrid
-        integrations={integrations}
+        providers={providers}
+        tools={tools}
         connections={connections.map((c) => ({
           provider: c.provider,
           metadata: (c.metadata as Record<string, unknown>) ?? {},

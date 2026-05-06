@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import { getWorkflow, listRunsWithSteps } from '@/lib/db/queries';
 import { RunLog } from '@/components/dashboard/RunLog';
+import type { TranscriptEntry } from '@/types/workflow';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -29,9 +30,13 @@ export default async function RunsPage({ params }: Params) {
       id: s.id,
       nodeId: s.nodeId,
       nodeName: s.nodeName,
+      goal: s.goal ?? '',
+      toolkit: (s.toolkit as string[] | null) ?? [],
+      parentStepId: s.parentStepId ?? null,
       status: s.status,
       input: (s.input as Record<string, unknown>) ?? {},
       output: (s.output as Record<string, unknown>) ?? {},
+      transcript: (s.transcript as TranscriptEntry[] | null) ?? [],
       error: s.error ?? null,
       startedAt: s.startedAt ? s.startedAt.toString() : null,
       completedAt: s.completedAt ? s.completedAt.toString() : null,

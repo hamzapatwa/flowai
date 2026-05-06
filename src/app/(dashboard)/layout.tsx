@@ -19,7 +19,7 @@ export default async function DashboardLayout({
         <aside className="w-56 border-r border-[#1f1f1f] flex flex-col">
           <div className="px-6 py-5 border-b border-[#1f1f1f]">
             <Link href="/dashboard" className="text-lg font-semibold tracking-tight">
-              <span className="text-[#6366f1]">Flow</span>AI
+              <span className="text-[#6366f1]">Agent</span>Flow
             </Link>
           </div>
           <nav className="flex flex-col p-2 gap-0.5 flex-1">

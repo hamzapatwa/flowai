@@ -29,8 +29,10 @@ export async function POST(req: Request) {
     userId,
     name: body.name ?? 'Untitled workflow',
     description: body.description ?? '',
+    prompt: body.prompt ?? null,
     definition: body.definition ?? { nodes: [], edges: [] },
     triggerType: body.triggerType ?? 'manual',
+    cron: body.cron ?? null,
   });
 
   return NextResponse.json({ workflow: wf });

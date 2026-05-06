@@ -5,8 +5,8 @@ import { GeistMono } from 'geist/font/mono';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'FlowAI — AI-native workflow automation',
-  description: 'Describe a workflow in plain English. Run it.',
+  title: 'AgentFlow — AI-native workflow builder',
+  description: 'Describe what you want. Agents make it happen.',
 };
 
 export default function RootLayout({

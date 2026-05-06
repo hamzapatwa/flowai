@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { nanoid } from 'nanoid';
-import { GMAIL_SCOPES } from '@/lib/integrations/gmail';
+import { GMAIL_SCOPES } from '@/lib/tools/google';
 
 const SLACK_SCOPES = ['chat:write', 'channels:read', 'users:read', 'im:write'];
+const GITHUB_SCOPES = ['repo', 'read:org', 'user:email'];
 
 type Params = { params: Promise<{ provider: string }> };
 
@@ -39,6 +40,26 @@ export async function GET(_req: Request, { params }: Params) {
       state,
     });
     authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  } else if (provider === 'github') {
+    const clientId = process.env.GITHUB_CLIENT_ID ?? '';
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope: GITHUB_SCOPES.join(' '),
+      state,
+      allow_signup: 'true',
+    });
+    authUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
+  } else if (provider === 'notion') {
+    const clientId = process.env.NOTION_CLIENT_ID ?? '';
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      owner: 'user',
+      state,
+    });
+    authUrl = `https://api.notion.com/v1/oauth/authorize?${params.toString()}`;
   } else {
     return new NextResponse('Unknown provider', { status: 400 });
   }

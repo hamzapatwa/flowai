@@ -25,7 +25,7 @@ export default async function DashboardPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Workflows</h1>
           <p className="text-sm text-[#737373] mt-1">
-            {workflows.length} workflow{workflows.length === 1 ? '' : 's'}
+            {workflows.length} agent workflow{workflows.length === 1 ? '' : 's'}
           </p>
         </div>
         <NewWorkflowDialog />
@@ -33,10 +33,10 @@ export default async function DashboardPage() {
 
       {workflows.length === 0 ? (
         <div className="border border-dashed border-[#1f1f1f] rounded-lg p-16 text-center">
-          <h3 className="text-lg font-medium mb-2">No workflows yet</h3>
+          <h3 className="text-lg font-medium mb-2">No agent workflows yet</h3>
           <p className="text-sm text-[#737373] mb-6">
-            Click <span className="text-[#fafafa]">New Workflow</span> to
-            describe your first workflow in plain English.
+            Click <span className="text-[#fafafa]">New Workflow</span> and
+            describe what you want — agents take it from there.
           </p>
         </div>
       ) : (

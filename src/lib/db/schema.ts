@@ -24,9 +24,13 @@ export const workflows = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     description: text('description'),
+    /** Latest user prompt that produced/regenerated this workflow. */
+    prompt: text('prompt'),
     definition: jsonb('definition').notNull().default({}),
     isActive: boolean('is_active').notNull().default(false),
     triggerType: text('trigger_type').notNull().default('manual'),
+    /** For schedule triggers, a cron expression like "0 9 * * *". */
+    cron: text('cron'),
     webhookId: text('webhook_id').unique(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -56,9 +60,17 @@ export const runSteps = pgTable('run_steps', {
     .references(() => runs.id, { onDelete: 'cascade' }),
   nodeId: text('node_id').notNull(),
   nodeName: text('node_name').notNull(),
+  /** Plain-English instruction the sub-agent was given. */
+  goal: text('goal').notNull().default(''),
+  /** ToolId[] this sub-agent was allowed to use. */
+  toolkit: jsonb('toolkit').notNull().default([]),
+  /** Parent step id for spawned sub-agents (null for top-level DAG nodes). */
+  parentStepId: text('parent_step_id'),
   status: text('status').notNull().default('pending'),
   input: jsonb('input').notNull().default({}),
   output: jsonb('output').notNull().default({}),
+  /** TranscriptEntry[] — append-only log of what the sub-agent thought/did. */
+  transcript: jsonb('transcript').notNull().default([]),
   error: text('error'),
   startedAt: timestamp('started_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),

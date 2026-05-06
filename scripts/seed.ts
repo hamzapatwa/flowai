@@ -2,98 +2,76 @@ import { loadEnvConfig } from '@next/env';
 loadEnvConfig(process.cwd());
 
 import { nanoid } from 'nanoid';
-import type { WorkflowDefinition } from '../src/types/workflow';
+import type { AgentWorkflowDefinition } from '../src/types/workflow';
 
 const DEMO_USER_ID = 'user_demo_seed';
 
-const slackWorkflow: WorkflowDefinition = {
+const newsDigestWorkflow: AgentWorkflowDefinition = {
   nodes: [
     {
-      id: 'trigger-1',
+      id: 'trigger',
       type: 'trigger',
-      name: 'Webhook',
-      integration: 'webhook',
-      action: 'receive',
+      name: 'Manual run',
+      goal: '',
+      toolkit: [],
       config: {},
-      position: { x: 250, y: 100 },
+      position: { x: 250, y: 80 },
     },
     {
-      id: 'action-slack-1',
-      type: 'action',
-      name: 'Notify #engineering',
-      integration: 'slack',
-      action: 'send_message',
-      config: {
-        channel: '#engineering',
-        text: 'New webhook event: {{trigger-1.body}}',
-      },
-      position: { x: 250, y: 250 },
+      id: 'research',
+      type: 'agent',
+      name: 'Research',
+      goal:
+        'Use web_search to find the top 3 AI/tech announcements from the last 24 hours. Return a JSON list of {title, url, snippet}.',
+      toolkit: ['web_search'],
+      config: {},
+      position: { x: 250, y: 240 },
+    },
+    {
+      id: 'digest',
+      type: 'agent',
+      name: 'Digest',
+      goal:
+        'Using the research output, write a 3-bullet email digest. Each bullet: title, one-sentence summary, link.',
+      toolkit: ['summarize'],
+      config: {},
+      position: { x: 250, y: 400 },
     },
   ],
   edges: [
-    { id: 'edge-1', source: 'trigger-1', target: 'action-slack-1' },
+    { id: 'edge-trigger-research', source: 'trigger', target: 'research' },
+    { id: 'edge-research-digest', source: 'research', target: 'digest' },
   ],
 };
 
-const httpWorkflow: WorkflowDefinition = {
+const slackWebhookWorkflow: AgentWorkflowDefinition = {
   nodes: [
     {
-      id: 'trigger-1',
-      type: 'trigger',
-      name: 'Manual',
-      integration: 'webhook',
-      action: 'manual',
-      config: {},
-      position: { x: 250, y: 100 },
-    },
-    {
-      id: 'action-http-1',
-      type: 'action',
-      name: 'Fetch JSON',
-      integration: 'http',
-      action: 'get',
-      config: { url: 'https://api.github.com/zen' },
-      position: { x: 250, y: 250 },
-    },
-  ],
-  edges: [
-    { id: 'edge-1', source: 'trigger-1', target: 'action-http-1' },
-  ],
-};
-
-const gmailWorkflow: WorkflowDefinition = {
-  nodes: [
-    {
-      id: 'trigger-1',
+      id: 'trigger',
       type: 'trigger',
       name: 'Webhook',
-      integration: 'webhook',
-      action: 'receive',
+      goal: '',
+      toolkit: [],
       config: {},
-      position: { x: 250, y: 100 },
+      position: { x: 250, y: 80 },
     },
     {
-      id: 'action-gmail-1',
-      type: 'action',
-      name: 'Send confirmation',
-      integration: 'gmail',
-      action: 'send_email',
-      config: {
-        to: '{{trigger-1.body.email}}',
-        subject: 'Thanks for signing up!',
-        body: 'Welcome aboard.',
-      },
-      position: { x: 250, y: 250 },
+      id: 'notify',
+      type: 'agent',
+      name: 'Notify Slack',
+      goal:
+        'Read the webhook payload (available as the `trigger` upstream output) and post a concise summary to the #engineering channel using the slack tool.',
+      toolkit: ['slack', 'summarize'],
+      config: {},
+      position: { x: 250, y: 240 },
     },
   ],
-  edges: [
-    { id: 'edge-1', source: 'trigger-1', target: 'action-gmail-1' },
-  ],
+  edges: [{ id: 'edge-trigger-notify', source: 'trigger', target: 'notify' }],
 };
 
 async function main() {
   const { db } = await import('../src/lib/db');
-  const { users, workflows, runs, runSteps } = await import('../src/lib/db/schema');
+  const { users, workflows } = await import('../src/lib/db/schema');
 
   console.log('Seeding demo data...');
 
@@ -101,73 +79,48 @@ async function main() {
     .insert(users)
     .values({
       id: DEMO_USER_ID,
-      email: 'demo@flowai.local',
+      email: 'demo@agentflow.local',
       name: 'Demo User',
     })
     .onConflictDoNothing();
 
   const seedWorkflows = [
     {
-      name: 'GitHub PR → Slack',
-      description: 'Notify the team in Slack when a PR is opened.',
-      definition: slackWorkflow,
-      triggerType: 'webhook',
-      isActive: true,
-    },
-    {
-      name: 'Manual GitHub Zen',
-      description: 'Fetch a random Zen quote from GitHub.',
-      definition: httpWorkflow,
+      name: 'AI news digest',
+      description:
+        'Find today’s top AI announcements, summarize, return a digest.',
+      prompt:
+        'Search the web for the top 3 AI announcements today and summarize each in two sentences.',
+      definition: newsDigestWorkflow,
       triggerType: 'manual',
       isActive: true,
     },
     {
-      name: 'Signup → Welcome Email',
-      description: 'Send a welcome email when someone signs up.',
-      definition: gmailWorkflow,
+      name: 'Webhook → Slack notify',
+      description:
+        'When a webhook fires, summarize the payload and post it to Slack.',
+      prompt:
+        'When a webhook event arrives, summarize it and post a notification to the #engineering Slack channel.',
+      definition: slackWebhookWorkflow,
       triggerType: 'webhook',
       isActive: false,
     },
   ];
 
   for (const wf of seedWorkflows) {
-    const inserted = await db
+    await db
       .insert(workflows)
       .values({
         userId: DEMO_USER_ID,
         name: wf.name,
         description: wf.description,
+        prompt: wf.prompt,
         definition: wf.definition as unknown as object,
         triggerType: wf.triggerType,
         isActive: wf.isActive,
         webhookId: wf.triggerType === 'webhook' ? nanoid(10) : null,
       })
       .returning();
-
-    const wfId = inserted[0].id;
-    const run = await db
-      .insert(runs)
-      .values({
-        workflowId: wfId,
-        status: 'success',
-        triggerData: { body: { sample: true }, headers: {}, method: 'POST' },
-        startedAt: new Date(Date.now() - 60_000),
-        completedAt: new Date(Date.now() - 58_000),
-      })
-      .returning();
-
-    for (const node of wf.definition.nodes) {
-      await db.insert(runSteps).values({
-        runId: run[0].id,
-        nodeId: node.id,
-        nodeName: node.name,
-        status: 'success',
-        input: node.config,
-        output: { ok: true, mock: true },
-        startedAt: new Date(Date.now() - 60_000),
-        completedAt: new Date(Date.now() - 58_000),
-      });
-    }
   }
 
   console.log('Seed complete.');

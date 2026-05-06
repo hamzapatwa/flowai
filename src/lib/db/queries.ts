@@ -1,8 +1,12 @@
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import { db } from './index';
 import { workflows, runs, runSteps, oauthTokens, users } from './schema';
 import { nanoid } from 'nanoid';
-import type { WorkflowDefinition } from '@/types/workflow';
+import type {
+  AgentWorkflowDefinition,
+  ToolId,
+  TranscriptEntry,
+} from '@/types/workflow';
 
 export async function ensureUser(params: {
   id: string;
@@ -48,19 +52,22 @@ export async function createWorkflow(input: {
   userId: string;
   name: string;
   description?: string;
-  definition: WorkflowDefinition;
+  prompt?: string;
+  definition: AgentWorkflowDefinition;
   triggerType: string;
+  cron?: string | null;
 }) {
-  const webhookId =
-    input.triggerType === 'webhook' ? nanoid(10) : null;
+  const webhookId = input.triggerType === 'webhook' ? nanoid(10) : null;
   const rows = await db
     .insert(workflows)
     .values({
       userId: input.userId,
       name: input.name,
       description: input.description,
+      prompt: input.prompt ?? null,
       definition: input.definition as unknown as object,
       triggerType: input.triggerType,
+      cron: input.cron ?? null,
       webhookId,
     })
     .returning();
@@ -73,16 +80,20 @@ export async function updateWorkflow(
   patch: Partial<{
     name: string;
     description: string;
-    definition: WorkflowDefinition;
+    prompt: string | null;
+    definition: AgentWorkflowDefinition;
     isActive: boolean;
     triggerType: string;
+    cron: string | null;
   }>
 ) {
   const update: Record<string, unknown> = { updatedAt: new Date() };
   if (patch.name !== undefined) update.name = patch.name;
   if (patch.description !== undefined) update.description = patch.description;
+  if (patch.prompt !== undefined) update.prompt = patch.prompt;
   if (patch.definition !== undefined) update.definition = patch.definition;
   if (patch.isActive !== undefined) update.isActive = patch.isActive;
+  if (patch.cron !== undefined) update.cron = patch.cron;
   if (patch.triggerType !== undefined) {
     update.triggerType = patch.triggerType;
     if (patch.triggerType === 'webhook') {
@@ -142,6 +153,23 @@ export async function listRunsWithSteps(workflowId: string) {
   return result;
 }
 
+export async function getLatestRunForWorkflow(workflowId: string) {
+  const rows = await db
+    .select()
+    .from(runs)
+    .where(eq(runs.workflowId, workflowId))
+    .orderBy(desc(runs.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getRunSteps(runId: string) {
+  return db
+    .select()
+    .from(runSteps)
+    .where(eq(runSteps.runId, runId));
+}
+
 export async function updateRun(
   id: string,
   patch: Partial<{
@@ -168,6 +196,9 @@ export async function createRunStep(input: {
   runId: string;
   nodeId: string;
   nodeName: string;
+  goal: string;
+  toolkit: ToolId[];
+  parentStepId?: string | null;
   input?: Record<string, unknown>;
 }) {
   const rows = await db
@@ -176,8 +207,12 @@ export async function createRunStep(input: {
       runId: input.runId,
       nodeId: input.nodeId,
       nodeName: input.nodeName,
+      goal: input.goal,
+      toolkit: input.toolkit as unknown as object,
+      parentStepId: input.parentStepId ?? null,
       input: input.input ?? {},
       status: 'running',
+      transcript: [],
       startedAt: new Date(),
     })
     .returning();
@@ -194,6 +229,17 @@ export async function updateRunStep(
   }>
 ) {
   await db.update(runSteps).set(patch).where(eq(runSteps.id, id));
+}
+
+export async function appendTranscript(
+  stepId: string,
+  entry: TranscriptEntry
+) {
+  // jsonb || jsonb appends to a jsonb array atomically without read-modify-write.
+  const payload = JSON.stringify(entry);
+  await db.execute(
+    sql`UPDATE run_steps SET transcript = transcript || ${payload}::jsonb WHERE id = ${stepId}`
+  );
 }
 
 export async function getOAuthToken(userId: string, provider: string) {

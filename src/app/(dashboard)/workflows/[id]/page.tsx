@@ -1,9 +1,13 @@
 import { auth } from '@clerk/nextjs/server';
 import { redirect, notFound } from 'next/navigation';
-import { getWorkflow } from '@/lib/db/queries';
-import { listIntegrations } from '@/lib/integrations';
+import {
+  getWorkflow,
+  listOAuthTokens,
+  getLatestRunForWorkflow,
+} from '@/lib/db/queries';
+import { listTools } from '@/lib/tools';
 import { WorkflowEditor } from '@/components/workflow/WorkflowEditor';
-import type { WorkflowDefinition } from '@/types/workflow';
+import type { AgentWorkflowDefinition, ToolId } from '@/types/workflow';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -15,7 +19,7 @@ export default async function WorkflowEditorPage({ params }: Params) {
   const wf = await getWorkflow(id, userId);
   if (!wf) notFound();
 
-  const definition = (wf.definition as unknown as WorkflowDefinition) ?? {
+  const definition = (wf.definition as unknown as AgentWorkflowDefinition) ?? {
     nodes: [],
     edges: [],
   };
@@ -26,13 +30,22 @@ export default async function WorkflowEditorPage({ params }: Params) {
       ? `${baseUrl}/api/webhooks/trigger/${wf.webhookId}`
       : undefined;
 
-  const integrations = listIntegrations().map((i) => ({
-    id: i.id,
-    name: i.name,
-    description: i.description,
-    actions: i.actions,
-    triggers: i.triggers,
+  const tools = listTools().map((t) => ({
+    id: t.id as ToolId,
+    name: t.name,
+    description: t.description,
+    requiresOAuth: t.requiresOAuth,
+    oauthProvider: t.oauthProvider,
   }));
+
+  const tokens = await listOAuthTokens(userId);
+  const connectedProviders = tokens.map((t) => t.provider);
+
+  const latestRun = await getLatestRunForWorkflow(id);
+  const initialRunId =
+    latestRun && (latestRun.status === 'pending' || latestRun.status === 'running')
+      ? latestRun.id
+      : null;
 
   return (
     <WorkflowEditor
@@ -42,7 +55,9 @@ export default async function WorkflowEditorPage({ params }: Params) {
       initialActive={wf.isActive}
       initialTriggerType={wf.triggerType}
       webhookUrl={webhookUrl}
-      integrations={integrations}
+      tools={tools}
+      connectedProviders={connectedProviders}
+      initialRunId={initialRunId}
     />
   );
 }

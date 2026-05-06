@@ -15,7 +15,7 @@ import { Textarea } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
 
 const DEMO_PROMPT =
-  'When a GitHub PR is opened, post a notification in the #engineering Slack channel with the PR title and link.';
+  'Search the web for the top 3 AI announcements today, summarize each in two sentences, and email the digest to me@example.com.';
 
 export function NewWorkflowDialog() {
   const [open, setOpen] = useState(false);
@@ -72,16 +72,17 @@ export function NewWorkflowDialog() {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-[#6366f1]" />
-            Describe your workflow
+            Describe what you want
           </DialogTitle>
           <DialogDescription>
-            FlowAI will generate the DAG for you using Claude Sonnet 4.5.
+            The orchestrator agent will plan a DAG of sub-agents using Claude
+            Sonnet 4.5.
           </DialogDescription>
         </DialogHeader>
         <Textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="When a webhook is received, send the payload to a Slack channel..."
+          placeholder="Search for the latest AI news, summarize the top 3, and email me a digest..."
           className="min-h-[140px]"
           disabled={loading}
         />
