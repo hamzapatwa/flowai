@@ -33,7 +33,7 @@ export function getWorkflowQueue(): Queue {
 
 export async function enqueueWorkflowRun(runId: string, workflowId: string) {
   const queue = getWorkflowQueue();
-  await queue.add(
+  const job = await queue.add(
     'execute',
     { runId, workflowId },
     {
@@ -43,4 +43,5 @@ export async function enqueueWorkflowRun(runId: string, workflowId: string) {
       removeOnFail: { count: 500 },
     }
   );
+  console.log(`[queue] Enqueued job ${job.id} for run ${runId}`);
 }
